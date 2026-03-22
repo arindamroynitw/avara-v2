@@ -1,7 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { User, Mic } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { User, Mic, LogOut } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
+import { useState } from "react";
 
 interface ChatHeaderProps {
   onVoiceCall?: () => void;
@@ -9,6 +12,21 @@ interface ChatHeaderProps {
 }
 
 export function ChatHeader({ onVoiceCall, voiceEnabled }: ChatHeaderProps) {
+  const router = useRouter();
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  const handleLogout = async () => {
+    setLoggingOut(true);
+    try {
+      const supabase = createClient();
+      await supabase.auth.signOut();
+      router.push("/login");
+    } catch (err) {
+      console.error("Logout error:", err);
+      setLoggingOut(false);
+    }
+  };
+
   return (
     <header className="bg-white border-b border-gray-100 px-4 py-3 flex items-center justify-between flex-shrink-0">
       <div>
@@ -30,14 +48,24 @@ export function ChatHeader({ onVoiceCall, voiceEnabled }: ChatHeaderProps) {
         <button
           onClick={onVoiceCall}
           disabled={!voiceEnabled}
-          className={`p-2 rounded-lg transition cursor-pointer ${
+          className={`p-2 rounded-lg transition ${
             voiceEnabled
-              ? "text-[#0F3460] hover:text-[#1A1A2E] hover:bg-gray-50"
-              : "text-[#9CA3AF] opacity-50 cursor-not-allowed"
+              ? "text-[#0F3460] hover:text-[#1A1A2E] hover:bg-gray-50 cursor-pointer"
+              : "text-[#D1D5DB] opacity-40 cursor-not-allowed"
           }`}
           aria-label="Voice call"
+          title={voiceEnabled ? "Start voice call" : "Voice calls coming soon"}
         >
           <Mic size={20} />
+        </button>
+        <button
+          onClick={handleLogout}
+          disabled={loggingOut}
+          className="p-2 rounded-lg text-[#9CA3AF] hover:text-[#E94560] hover:bg-red-50 transition cursor-pointer"
+          aria-label="Log out"
+          title="Log out"
+        >
+          <LogOut size={18} />
         </button>
       </div>
     </header>

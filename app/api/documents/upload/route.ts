@@ -66,7 +66,10 @@ export async function POST(req: Request) {
   const timestamp = Date.now();
   const storagePath = `${user.id}/${documentType}/${timestamp}_${file.name}`;
 
+  console.log(`[UPLOAD] User ${user.id}: ${documentType}, file="${file.name}", size=${file.size}, type=${file.type}`);
+
   const fileBuffer = Buffer.from(await file.arrayBuffer());
+  console.log(`[UPLOAD] Buffer created: ${fileBuffer.length} bytes`);
 
   const { error: uploadError } = await adminClient.storage
     .from("documents")
@@ -76,7 +79,7 @@ export async function POST(req: Request) {
     });
 
   if (uploadError) {
-    console.error("Storage upload error:", uploadError);
+    console.error(`[UPLOAD] Storage upload FAILED:`, uploadError);
     return Response.json(
       { error: "Failed to upload file." },
       { status: 500 }
@@ -135,6 +138,7 @@ export async function POST(req: Request) {
   }
 
   // 7. Parse document
+  console.log(`[UPLOAD] Starting parse for ${documentType}, docId=${docId}`);
   try {
     let parsedData: Record<string, unknown> = {};
     let state = await loadConversationState(user.id);
@@ -184,8 +188,9 @@ export async function POST(req: Request) {
       parsedData,
       summary,
     });
+    console.log(`[UPLOAD] Parse SUCCESS for ${documentType}, docId=${docId}`);
   } catch (error) {
-    console.error("Parsing error:", error);
+    console.error(`[UPLOAD] Parse FAILED for ${documentType}, docId=${docId}:`, error);
 
     await supabase
       .from("uploaded_documents")

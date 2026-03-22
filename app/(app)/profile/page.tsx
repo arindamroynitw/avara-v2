@@ -2,8 +2,10 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ArrowLeft, LogOut } from "lucide-react";
 import { useUser } from "@/lib/contexts/user-context";
+import { createClient } from "@/lib/supabase/client";
 import { ProfileSection } from "@/components/profile/ProfileSection";
 import { EditableField } from "@/components/profile/EditableField";
 import { BridgeCTA } from "@/components/profile/BridgeCTA";
@@ -51,6 +53,7 @@ export default function ProfilePage() {
   );
   const [loading, setLoading] = useState(true);
   const user = useUser();
+  const router = useRouter();
 
   useEffect(() => {
     Promise.all([
@@ -361,6 +364,19 @@ export default function ProfilePage() {
 
         {/* Bridge CTA */}
         {data.minimumViableComplete && <BridgeCTA />}
+
+        {/* Logout */}
+        <button
+          onClick={async () => {
+            const supabase = createClient();
+            await supabase.auth.signOut();
+            router.push("/login");
+          }}
+          className="w-full mt-4 py-3 text-sm text-[#6B7280] hover:text-[#E94560] transition flex items-center justify-center gap-2"
+        >
+          <LogOut size={16} />
+          Log out
+        </button>
       </div>
     </div>
   );

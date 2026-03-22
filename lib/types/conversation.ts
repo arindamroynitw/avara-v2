@@ -88,6 +88,9 @@ export interface ConversationState {
   completedVoiceSessions: string[];
   voiceSuggestionsShown: string[]; // tracks which voice suggestions have been shown ('ch2_ch3', 'post_document', 'ch4_summary')
 
+  // Component injection tracking (prevents duplicate cards)
+  componentsShown: string[]; // e.g., ["upload_card:bank_statement", "insight_card:asset_allocation"]
+
   // Session management
   lastActiveAt: string;
   totalTimeSpentSeconds: number;
@@ -156,6 +159,7 @@ export function createInitialState(): ConversationState {
     activeVoiceSession: null,
     completedVoiceSessions: [],
     voiceSuggestionsShown: [],
+    componentsShown: [],
     lastActiveAt: new Date().toISOString(),
     totalTimeSpentSeconds: 0,
     sessionCount: 1,

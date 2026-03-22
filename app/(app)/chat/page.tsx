@@ -66,7 +66,10 @@ function ChatView({ initialMessages }: { initialMessages: UIMessage[] }) {
     typeof import("@elevenlabs/react").useConversation
   > | null>(null);
 
-  const voiceEnabled = !!process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID;
+  // TEMPORARILY DISABLED: Voice mode unavailable (ElevenLabs credits exhausted)
+  // Re-enable when credits are restored:
+  // const voiceEnabled = !!process.env.NEXT_PUBLIC_ELEVENLABS_AGENT_ID;
+  const voiceEnabled = false;
 
   // B6: Clean up voice timer on unmount
   useEffect(() => {

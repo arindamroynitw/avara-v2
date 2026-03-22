@@ -1,14 +1,19 @@
 import type { ConversationState } from "@/lib/types/conversation";
 import type { ComponentInjection } from "@/lib/types/messages";
-import { isChapterComplete } from "@/lib/state/completeness";
+// import { isChapterComplete } from "@/lib/state/completeness";
 
 /**
- * Evaluate voice call suggestion triggers.
- * Three moments per SPEC. Each fires at most ONCE (tracked via voiceSuggestionsShown).
+ * Voice suggestions are TEMPORARILY DISABLED while ElevenLabs
+ * credits are being provisioned. Uncomment the logic below
+ * when credits are restored.
  */
 export function evaluateVoiceSuggestions(
-  state: ConversationState
+  _state: ConversationState
 ): ComponentInjection[] {
+  // DISABLED: Voice mode temporarily unavailable (credits exhausted)
+  return [];
+
+  /* --- ORIGINAL LOGIC (re-enable when credits are restored) ---
   const shown = state.voiceSuggestionsShown || [];
 
   // Don't suggest if a voice call is active
@@ -74,4 +79,5 @@ export function evaluateVoiceSuggestions(
   }
 
   return [];
+  --- END ORIGINAL LOGIC --- */
 }
