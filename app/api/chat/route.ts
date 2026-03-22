@@ -30,8 +30,12 @@ import { DATA_SAFETY_FRAMING } from "@/lib/rules/chapter-transitions";
 
 export const maxDuration = 60;
 
+// Max messages to send to OpenAI (prevents unbounded context growth)
+const MAX_MODEL_MESSAGES = 15;
+
 export async function POST(req: Request) {
   const requestStart = Date.now();
+  const elapsed = () => `${Date.now() - requestStart}ms`;
 
   // ── 1. Parse request ──
   let uiMessages: UIMessage[];
@@ -77,6 +81,7 @@ export async function POST(req: Request) {
   try {
     conversationState = await loadConversationState(userId);
     summary = await loadSummary(userId);
+    console.log(`[CHAT] ${elapsed()} | State loaded`);
   } catch (err) {
     console.error("[CHAT] Failed to load conversation state:", err);
     return new Response("Failed to load conversation state", { status: 500 });
@@ -91,7 +96,7 @@ export async function POST(req: Request) {
       .join("") || "";
 
   console.log(
-    `[CHAT] User ${userId.substring(0, 8)}... | Ch${conversationState.currentChapter} | "${userText.substring(0, 80)}${userText.length > 80 ? "..." : ""}"`
+    `[CHAT] User ${userId.substring(0, 8)}... | Ch${conversationState.currentChapter} | "${userText.substring(0, 80)}${userText.length > 80 ? "..." : ""}" | ${uiMessages.length} client msgs`
   );
 
   // ── 5. Handle special triggers ──
@@ -138,7 +143,6 @@ export async function POST(req: Request) {
     }
   } catch (err) {
     console.error("[CHAT] Error loading trigger context:", err);
-    // Continue without document context — not fatal
   }
 
   const isSystemTrigger =
@@ -158,7 +162,6 @@ export async function POST(req: Request) {
       });
     } catch (err) {
       console.error("[CHAT] Failed to save user message:", err);
-      // Non-fatal — continue
     }
   }
 
@@ -208,7 +211,7 @@ export async function POST(req: Request) {
         : getMinimumViableMissing(conversationState),
     }) + documentContext;
 
-  // ── 7. Convert messages for model ──
+  // ── 7. Convert messages for model — TRIM to last N ──
   let modelMessages;
   try {
     modelMessages = await convertToModelMessages(uiMessages);
@@ -217,9 +220,16 @@ export async function POST(req: Request) {
     return new Response("Failed to process messages", { status: 500 });
   }
 
+  // FIX: Trim to last MAX_MODEL_MESSAGES to prevent unbounded context growth.
+  // The rolling summary provides context for older messages.
+  const originalCount = modelMessages.length;
+  if (modelMessages.length > MAX_MODEL_MESSAGES) {
+    modelMessages = modelMessages.slice(-MAX_MODEL_MESSAGES);
+  }
+
   // ── 8. Fire parallel calls ──
   console.log(
-    `[CHAT] Calling OpenAI | system prompt: ${systemPrompt.length} chars | messages: ${modelMessages.length} | collected: ${collectedSummaryParts.length}/${collectedSummaryParts.length + missingSummaryParts.length}`
+    `[CHAT] ${elapsed()} | Calling OpenAI | prompt: ${systemPrompt.length} chars | msgs: ${modelMessages.length} (trimmed from ${originalCount}) | collected: ${collectedSummaryParts.length}/${collectedSummaryParts.length + missingSummaryParts.length}`
   );
 
   const streamPromise = streamText({
@@ -227,7 +237,7 @@ export async function POST(req: Request) {
     system: systemPrompt,
     messages: modelMessages,
     temperature: 0.7,
-    maxOutputTokens: 800,
+    maxOutputTokens: 1200, // FIX: increased from 800 to avoid truncation on longer responses
   });
 
   const extractionPromise = isSystemTrigger
@@ -238,15 +248,17 @@ export async function POST(req: Request) {
   const stream = createUIMessageStream({
     execute: async ({ writer }) => {
       try {
-        // Merge streaming text
+        // Stream Ria's response
         const result = await streamPromise;
         writer.merge(result.toUIMessageStream());
 
-        // Wait for extraction
+        console.log(`[CHAT] ${elapsed()} | OpenAI stream merged`);
+
+        // Wait for extraction (runs in parallel with streaming)
         const extraction = await extractionPromise;
 
         console.log(
-          `[CHAT] Extraction result: ${Object.keys(extraction.extractedFields).length} fields: ${Object.keys(extraction.extractedFields).join(", ") || "(none)"}`
+          `[CHAT] ${elapsed()} | Extraction: ${Object.keys(extraction.extractedFields).length} fields [${Object.keys(extraction.extractedFields).join(", ") || "none"}]`
         );
 
         // Merge extraction into state
@@ -265,24 +277,19 @@ export async function POST(req: Request) {
           !updatedState.chapterCompletedAt[updatedState.currentChapter]
         ) {
           console.log(
-            `[CHAT] Chapter ${updatedState.currentChapter} complete → transitioning to ${updatedState.currentChapter + 1}`
+            `[CHAT] Chapter ${updatedState.currentChapter} complete → ${updatedState.currentChapter + 1}`
           );
 
           try {
             await commitChapterToProfile(userId, extraction.extractedFields);
           } catch (err) {
-            console.error("[CHAT] Profile commit failed:", err);
+            console.error("[CHAT] Chapter commit failed:", err);
           }
 
           updatedState.chapterCompletedAt[updatedState.currentChapter] =
             new Date().toISOString();
-          const nextChapter = (updatedState.currentChapter + 1) as
-            | 1
-            | 2
-            | 3
-            | 4;
-          updatedState.chapterStartedAt[nextChapter] =
-            new Date().toISOString();
+          const nextChapter = (updatedState.currentChapter + 1) as 1 | 2 | 3 | 4;
+          updatedState.chapterStartedAt[nextChapter] = new Date().toISOString();
 
           if (updatedState.currentChapter === 1) {
             writer.write({
@@ -327,7 +334,7 @@ export async function POST(req: Request) {
 
         if (components.length > 0) {
           console.log(
-            `[CHAT] Injecting ${components.length} components: ${components.map((c) => c.type).join(", ")}`
+            `[CHAT] ${elapsed()} | Injecting ${components.length} components: ${components.map((c) => c.type).join(", ")}`
           );
         }
 
@@ -339,14 +346,14 @@ export async function POST(req: Request) {
           } as never);
         }
 
-        // Save state
+        // ── Post-stream operations (all non-fatal) ──
+
         try {
           await saveConversationState(userId, updatedState);
         } catch (err) {
-          console.error("[CHAT] Failed to save conversation state:", err);
+          console.error("[CHAT] Failed to save state:", err);
         }
 
-        // Save assistant message
         try {
           const fullText = await result.text;
           await saveMessage(userId, {
@@ -357,19 +364,21 @@ export async function POST(req: Request) {
             chapter: updatedState.currentChapter,
           });
         } catch (err) {
-          console.error("[CHAT] Failed to save assistant message:", err);
+          console.error("[CHAT] Failed to save assistant msg:", err);
         }
 
         // Rolling summary every 10 messages
         if (messageCount > 0 && messageCount % 10 === 0) {
           try {
-            const recentMsgs = await (await import("@/lib/state/messages")).loadRecentMessages(userId, 10);
+            const recentMsgs = await (
+              await import("@/lib/state/messages")
+            ).loadRecentMessages(userId, 10);
             const newSummary = await generateRollingSummary(
               summary,
               recentMsgs.map((m) => ({ role: m.role, content: m.content }))
             );
             await saveSummary(userId, newSummary);
-            console.log(`[CHAT] Rolling summary updated at message ${messageCount}`);
+            console.log(`[CHAT] Rolling summary updated at msg ${messageCount}`);
           } catch (err) {
             console.error("[CHAT] Rolling summary failed:", err);
           }
@@ -387,7 +396,7 @@ export async function POST(req: Request) {
           }
         }
 
-        // Check for onboarding completion
+        // Check onboarding completion
         if (
           updatedState.currentChapter === 4 &&
           isMinimumViableComplete(updatedState) &&
@@ -404,21 +413,22 @@ export async function POST(req: Request) {
                 .from("users")
                 .update({ onboarding_status: "completed" })
                 .eq("id", userId);
-              console.log(`[CHAT] Onboarding completed for user ${userId.substring(0, 8)}...`);
+              console.log(`[CHAT] Onboarding completed for ${userId.substring(0, 8)}...`);
             } catch (err) {
-              console.error("[CHAT] Failed to update onboarding status:", err);
+              console.error("[CHAT] Completion update failed:", err);
             }
           }
         }
 
-        const elapsed = Date.now() - requestStart;
         console.log(
-          `[CHAT] Done | ${elapsed}ms | Ch${updatedState.currentChapter} | collected: ${Object.entries(updatedState.collected).flatMap(([, items]) => Object.values(items as Record<string, boolean>).filter(Boolean)).length}/${collectedSummaryParts.length + missingSummaryParts.length}`
+          `[CHAT] ${elapsed()} | DONE | Ch${updatedState.currentChapter} | collected: ${Object.entries(updatedState.collected).flatMap(([, items]) => Object.values(items as Record<string, boolean>).filter(Boolean)).length}/${collectedSummaryParts.length + missingSummaryParts.length}`
         );
       } catch (err) {
-        console.error("[CHAT] STREAM ERROR — this will lock the client chat:", err);
-        // Re-throw so the stream reports the error to the client
-        throw err;
+        // FIX: DO NOT re-throw. The stream text has already been sent to the client.
+        // Re-throwing kills the stream mid-response, causing truncated messages + locked chat.
+        // Post-stream failures (state save, profile commit, etc.) are non-fatal.
+        console.error(`[CHAT] ${elapsed()} | CRITICAL STREAM ERROR (gracefully handled):`, err);
+        // Stream closes normally — client receives whatever text was already streamed.
       }
     },
   });

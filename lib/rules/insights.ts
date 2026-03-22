@@ -36,15 +36,30 @@ export function evaluateInsights(
   }> = [
     {
       type: "asset_allocation",
-      compute: () => computeAssetAllocationInsight(profile, assets),
+      // Only show when we have actual asset records (from conversation OR documents)
+      compute: () =>
+        assets.length >= 2
+          ? computeAssetAllocationInsight(profile, assets)
+          : null,
     },
     {
       type: "savings_rate",
-      compute: () => computeSavingsRateInsight(profile),
+      // Only show when both income AND expenses are explicitly collected
+      compute: () =>
+        state.collected?.income?.monthlyTakeHome &&
+        state.collected?.expenses?.monthlyExpenses
+          ? computeSavingsRateInsight(profile)
+          : null,
     },
     {
       type: "expense_pattern",
-      compute: () => computeExpensePatternInsight(profile),
+      // FIX: Only show expense breakdown when bank statement is actually parsed.
+      // Without this guard, conversational mentions of spending ("20k rent, 10k food")
+      // trigger the insight prematurely with incomplete data.
+      compute: () =>
+        state.documents?.bankStatement === "parsed"
+          ? computeExpensePatternInsight(profile)
+          : null,
     },
     {
       type: "insurance_gap",
