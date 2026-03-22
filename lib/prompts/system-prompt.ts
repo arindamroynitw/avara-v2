@@ -105,7 +105,87 @@ If the user's message is exactly "[SESSION_START]", this is a new conversation s
 - Don't use markdown, bullet points, or structured formatting in responses
 - Don't ask multiple questions in one message
 - Don't summarize what you just did at the end of responses
-${params.collectedSummary ? `\n## DATA COLLECTED SO FAR\n${params.collectedSummary}\nDo NOT re-ask for items already collected. Focus on what's still missing.\n` : ""}${params.missingSummary ? `\n## STILL MISSING\n${params.missingSummary}\nPrioritize collecting these items in the current chapter.\n` : ""}${params.rollingSummary ? `\n## CONVERSATION CONTEXT\n${params.rollingSummary}\n` : ""}${params.currentChapter === 4 ? buildChapter4Instructions(params) : ""}${params.isReturningUser ? buildReturningUserInstructions(params) : ""}`;
+${buildDataTrackingSection(params)}${params.rollingSummary ? `\n## CONVERSATION CONTEXT\n${params.rollingSummary}\n` : ""}${params.currentChapter === 4 ? buildChapter4Instructions(params) : ""}${params.isReturningUser ? buildReturningUserInstructions(params) : ""}`;
+}
+
+// Maps raw field paths to human-readable questions Ria should ask
+const MISSING_FIELD_PROMPTS: Record<string, string> = {
+  "personal.age": "their age",
+  "personal.city": "which city they live in",
+  "personal.maritalStatus": "whether they're single/married",
+  "personal.dependents": "if they have any dependents (kids, parents, etc.)",
+  "personal.employer": "what they do for work and where",
+  "personal.industry": "their industry",
+  "personal.housing": "whether they rent or own their home",
+  "personal.parentSituation": "their parents' financial situation and health insurance",
+  "income.monthlyTakeHome": "their monthly take-home salary (not CTC)",
+  "income.variablePay": "any bonuses or variable pay",
+  "income.sideIncome": "any side income or freelance work",
+  "expenses.monthlyExpenses": "roughly how much they spend each month",
+  "expenses.breakdown": "a breakdown of where their money goes (rent, food, subscriptions, etc.)",
+  "investments.mutualFunds": "whether they have any mutual fund investments",
+  "investments.stocks": "whether they hold any stocks",
+  "investments.fds": "whether they have any fixed deposits",
+  "investments.ppf": "whether they have a PPF account",
+  "investments.epf": "their EPF/PF balance",
+  "investments.nps": "whether they invest in NPS",
+  "investments.gold": "whether they own any gold (physical, digital, or SGBs)",
+  "investments.realEstate": "whether they own any property (beyond where they live)",
+  "investments.crypto": "whether they hold any crypto",
+  "investments.esopRsu": "whether they have ESOPs or RSUs",
+  "insurance.healthInsurance": "their health insurance situation (personal, employer, or none)",
+  "insurance.lifeInsurance": "whether they have any life insurance (especially term life)",
+  "tax.regime": "which tax regime they use (old or new)",
+  "tax.deductions": "what deductions they claim (80C, 80D, HRA, etc.)",
+  "goals.goalsOrHurdleRate": "their financial goals or target returns",
+  "goals.riskProfile": "how they handle risk and market drops",
+  "goals.careerTrajectory": "their career plans for the next few years",
+};
+
+function buildDataTrackingSection(params: {
+  collectedSummary?: string;
+  missingSummary?: string;
+  currentChapter: number;
+}): string {
+  if (!params.collectedSummary && !params.missingSummary) return "";
+
+  let section = "";
+
+  if (params.collectedSummary) {
+    section += `\n## DATA ALREADY COLLECTED\n${params.collectedSummary}\nDo NOT re-ask for items already collected.\n`;
+  }
+
+  if (params.missingSummary) {
+    // Convert raw field paths to human-readable prompts
+    const missingFields = params.missingSummary
+      .replace("Still missing: ", "")
+      .split(", ")
+      .map((f) => f.trim());
+
+    // Determine which fields are relevant for the current chapter
+    const chapterRelevantPrefixes: Record<number, string[]> = {
+      1: ["personal"],
+      2: ["income", "expenses", "investments", "insurance", "tax"],
+      3: ["goals"],
+      4: [],
+    };
+    const relevantPrefixes = chapterRelevantPrefixes[params.currentChapter] || [];
+
+    const currentChapterMissing = missingFields
+      .filter((f) => relevantPrefixes.some((p) => f.startsWith(p)))
+      .map((f) => MISSING_FIELD_PROMPTS[f] || f)
+      .filter(Boolean);
+
+    if (currentChapterMissing.length > 0) {
+      section += `\n## CRITICAL: ITEMS YOU STILL NEED TO ASK ABOUT\nThe following items for this chapter have NOT been discussed yet. You MUST ask about these — work them into the conversation naturally, one at a time:\n`;
+      currentChapterMissing.forEach((item) => {
+        section += `- Ask about ${item}\n`;
+      });
+      section += `\nDon't rapid-fire these. Weave them naturally into conversation. But DO cover them before moving to the next chapter.\n`;
+    }
+  }
+
+  return section;
 }
 
 function buildChapter4Instructions(params: {
