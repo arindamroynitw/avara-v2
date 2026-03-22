@@ -1,0 +1,11 @@
+{
+  "regions": ["bom1"],
+  "functions": {
+    "app/api/documents/upload/route.ts": {
+      "maxDuration": 60
+    },
+    "app/api/voice/end/route.ts": {
+      "maxDuration": 60
+    }
+  }
+}
