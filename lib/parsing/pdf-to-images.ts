@@ -1,60 +1,22 @@
-import { createCanvas } from "canvas";
-
 /**
- * Convert a PDF buffer to an array of base64 PNG data URIs.
- * Uses pdfjs-dist legacy build (Node.js compatible) + canvas.
- * Caps at 10 pages, renders at 150 DPI (2x scale).
+ * Check if a PDF buffer is password-protected.
+ * Uses a simple heuristic: look for /Encrypt in the PDF header.
+ * This avoids needing pdfjs-dist or canvas in serverless environments.
  */
-export async function convertPdfToImages(
-  pdfBuffer: Buffer
-): Promise<string[]> {
-  // Dynamic import for ESM module
-  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-
-  const data = new Uint8Array(pdfBuffer);
-  const doc = await pdfjsLib.getDocument({ data }).promise;
-
-  const pageCount = Math.min(doc.numPages, 10);
-  const images: string[] = [];
-
-  for (let i = 1; i <= pageCount; i++) {
-    const page = await doc.getPage(i);
-    const scale = 2.0; // ~150 DPI
-    const viewport = page.getViewport({ scale });
-
-    const canvas = createCanvas(viewport.width, viewport.height);
-    const context = canvas.getContext("2d");
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (page.render as any)({
-      canvasContext: context as any,
-      viewport,
-    }).promise;
-
-    const pngBuffer = canvas.toBuffer("image/png");
-    const base64 = pngBuffer.toString("base64");
-    images.push(`data:image/png;base64,${base64}`);
-  }
-
-  return images;
+export async function isPdfEncrypted(pdfBuffer: Buffer): Promise<boolean> {
+  // PDF encryption is indicated by an /Encrypt entry in the trailer/xref
+  const pdfString = pdfBuffer.toString("latin1");
+  return pdfString.includes("/Encrypt");
 }
 
 /**
- * Check if a PDF buffer is password-protected.
- * Returns true if the PDF requires a password to open.
+ * @deprecated No longer needed — we send PDFs directly to GPT-4o.
+ * Kept for API compatibility but should not be called.
  */
-export async function isPdfEncrypted(pdfBuffer: Buffer): Promise<boolean> {
-  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  const data = new Uint8Array(pdfBuffer);
-
-  try {
-    await pdfjsLib.getDocument({ data }).promise;
-    return false;
-  } catch (err: unknown) {
-    const error = err as { name?: string };
-    if (error.name === "PasswordException") {
-      return true;
-    }
-    throw err;
-  }
+export async function convertPdfToImages(
+  _pdfBuffer: Buffer
+): Promise<string[]> {
+  throw new Error(
+    "convertPdfToImages is deprecated. Use direct PDF file input with GPT-4o instead."
+  );
 }

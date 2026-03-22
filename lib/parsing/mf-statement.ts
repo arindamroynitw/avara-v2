@@ -1,5 +1,4 @@
 import OpenAI from "openai";
-import { convertPdfToImages } from "./pdf-to-images";
 import { buildMFStatementPrompt } from "@/lib/prompts/parsing-prompts";
 import type { MFStatementParsed } from "@/lib/types/documents";
 
@@ -8,7 +7,7 @@ const client = new OpenAI();
 export async function parseMFStatement(
   pdfBuffer: Buffer
 ): Promise<MFStatementParsed> {
-  const images = await convertPdfToImages(pdfBuffer);
+  const base64 = pdfBuffer.toString("base64");
 
   const response = await client.chat.completions.create({
     model: "gpt-4o",
@@ -17,10 +16,15 @@ export async function parseMFStatement(
       { role: "system", content: buildMFStatementPrompt() },
       {
         role: "user",
-        content: images.map((img) => ({
-          type: "image_url" as const,
-          image_url: { url: img },
-        })),
+        content: [
+          {
+            type: "file" as const,
+            file: {
+              file_data: `data:application/pdf;base64,${base64}`,
+              filename: "mf_statement.pdf",
+            },
+          },
+        ],
       },
     ],
     temperature: 0,
