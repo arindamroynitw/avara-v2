@@ -16,6 +16,8 @@ export interface RuleResult {
 export interface RuleContext {
   profile?: any;
   assets?: any[];
+  isFirstAssistantMessage?: boolean;
+  userMessageCount?: number;
 }
 
 export function evaluateRules(
@@ -25,7 +27,12 @@ export function evaluateRules(
 ): RuleResult {
   const components: ComponentInjection[] = [];
 
-  components.push(...evaluateQuickReplies(state, extraction));
+  components.push(
+    ...evaluateQuickReplies(state, extraction, {
+      isFirstAssistantMessage: context?.isFirstAssistantMessage,
+      userMessageCount: context?.userMessageCount,
+    })
+  );
   components.push(...evaluateUploadCards(state));
   components.push(...evaluateChapterTransitions(state));
 

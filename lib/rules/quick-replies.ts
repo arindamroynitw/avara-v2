@@ -4,12 +4,17 @@ import type { ExtractionResult } from "@/lib/state/merge";
 
 export function evaluateQuickReplies(
   state: ConversationState,
-  _extraction: ExtractionResult | null
+  _extraction: ExtractionResult | null,
+  context?: { isFirstAssistantMessage?: boolean; userMessageCount?: number }
 ): ComponentInjection[] {
   const components: ComponentInjection[] = [];
 
-  // Opening quick replies — first session only, before any personal data collected
+  // Opening quick replies — ONLY on the very first assistant message (SESSION_START response)
+  // Once the user has sent any real message, these should never appear again
+  const userMsgCount = context?.userMessageCount ?? 999;
   if (
+    context?.isFirstAssistantMessage &&
+    userMsgCount === 0 &&
     (state.sessionCount || 1) <= 1 &&
     !state.collected.personal.age &&
     !state.collected.personal.employer
@@ -28,8 +33,12 @@ export function evaluateQuickReplies(
     });
   }
 
-  // U4: Returning user quick replies — sessionCount > 1
-  if ((state.sessionCount || 1) > 1 && state.collected.personal.age) {
+  // U4: Returning user quick replies — only on SESSION_START for returning users
+  if (
+    context?.isFirstAssistantMessage &&
+    (state.sessionCount || 1) > 1 &&
+    state.collected.personal.age
+  ) {
     components.push({
       type: "quick_reply",
       data: {

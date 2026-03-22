@@ -245,10 +245,23 @@ export async function POST(req: Request) {
         supabase.from("assets").select("*").eq("user_id", user.id),
       ]);
 
+      // Count real user messages (non-system-trigger messages from the client)
+      const realUserMessages = uiMessages.filter(
+        (m) =>
+          m.role === "user" &&
+          !m.parts?.some(
+            (p) =>
+              p.type === "text" &&
+              (p as { type: "text"; text: string }).text.startsWith("[")
+          )
+      );
+
       // Evaluate rules engine (with profile context for insights)
       const { components } = evaluateRules(updatedState, extraction, {
         profile: profileRes.data,
         assets: assetsRes.data || [],
+        isFirstAssistantMessage: userText === "[SESSION_START]",
+        userMessageCount: realUserMessages.length,
       });
 
       // Write component injections as data parts
