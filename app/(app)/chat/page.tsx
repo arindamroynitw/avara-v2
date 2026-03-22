@@ -43,7 +43,7 @@ export default function ChatPage() {
 }
 
 function ChatView({ initialMessages }: { initialMessages: UIMessage[] }) {
-  const { messages, sendMessage, status, setMessages } = useChat({
+  const { messages, sendMessage, status, setMessages, error, clearError } = useChat({
     dataPartSchemas,
     messages: initialMessages.length > 0 ? initialMessages : undefined,
   });
@@ -234,22 +234,27 @@ function ChatView({ initialMessages }: { initialMessages: UIMessage[] }) {
     }
   }, []);
 
+  // Allow sending when ready OR after an error (to recover)
+  const canSend = status === "ready" || status === "error";
+
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault();
-      if (!input.trim() || status !== "ready") return;
+      if (!input.trim() || !canSend) return;
+      if (error) clearError(); // Clear previous error before retrying
       sendMessage({ text: input.trim() });
       setInput("");
     },
-    [input, status, sendMessage]
+    [input, canSend, error, clearError, sendMessage]
   );
 
   const handleQuickReplySelect = useCallback(
     (option: string) => {
-      if (status !== "ready") return;
+      if (!canSend) return;
+      if (error) clearError();
       sendMessage({ text: option });
     },
-    [status, sendMessage]
+    [canSend, error, clearError, sendMessage]
   );
 
   // Filter out hidden trigger messages from display
@@ -271,6 +276,7 @@ function ChatView({ initialMessages }: { initialMessages: UIMessage[] }) {
 
   const isLoading =
     status === "submitted" || status === "streaming" || isUploading;
+  const hasError = status === "error";
 
   return (
     <div className="flex flex-col h-dvh bg-[#F7F7FA]">
@@ -286,6 +292,20 @@ function ChatView({ initialMessages }: { initialMessages: UIMessage[] }) {
         onStartVoiceCall={() => handleStartVoiceCall("suggestion_card")}
         uploadingDocType={uploadingDocType}
       />
+      {/* Error recovery banner */}
+      {hasError && (
+        <div className="bg-red-50 border-t border-red-200 px-4 py-2 flex items-center justify-between flex-shrink-0">
+          <p className="text-xs text-red-600">
+            Something went wrong. Try sending your message again.
+          </p>
+          <button
+            onClick={() => clearError()}
+            className="text-xs text-red-500 underline ml-2 cursor-pointer"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
       <ChatInput
         input={input}
         onChange={(e) => setInput(e.target.value)}
