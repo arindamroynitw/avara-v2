@@ -17,6 +17,10 @@ RULES:
 - Use null for values that are mentioned but ambiguous.
 - Return {} (empty object) if no extractable data is found.
 - Do not re-extract data that has already been collected.
+- IMPORTANT: When a user says they DON'T have something (e.g., "no loans", "no crypto", "no side income", "I'm single"), still extract it — set the value to false, 0, "none", or [] as appropriate. This marks the field as "discussed" even if the answer is negative.
+- For "dependents": if user is single with no kids, extract as 0. If they mention parents as dependents, extract accordingly.
+- For "parentSituation": any discussion of parents (pension, insurance, health) counts — extract parentFinanciallyIndependent and parentHealthInsurance from context.
+- For investments: if user says "I only have MFs and stocks", extract other types as false (e.g., "fds": false, "ppf": false, etc.).
 
 Already collected: ${alreadyCollected || "nothing yet"}
 

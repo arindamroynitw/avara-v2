@@ -30,27 +30,29 @@ export function isChapterComplete(
   const c = state.collected;
 
   switch (chapter) {
-    case 1:
-      return Object.values(c.personal).every(Boolean);
-
-    case 2: {
-      const incomeComplete = Object.values(c.income).every(Boolean);
-      const expensesComplete = Object.values(c.expenses).every(Boolean);
-      // For investments, at least one type must be addressed (all must be true/false via conversation)
-      const investmentsComplete = Object.values(c.investments).every(Boolean);
-      const insuranceComplete = Object.values(c.insurance).every(Boolean);
-      const taxComplete = Object.values(c.tax).every(Boolean);
-      return (
-        incomeComplete &&
-        expensesComplete &&
-        investmentsComplete &&
-        insuranceComplete &&
-        taxComplete
-      );
+    case 1: {
+      // Key personal items — need at least 4 of 8 core fields
+      // (age/city/employer are most important, but don't require ALL 8)
+      const personalItems = Object.values(c.personal);
+      const personalCollected = personalItems.filter(Boolean).length;
+      return personalCollected >= 4;
     }
 
-    case 3:
-      return Object.values(c.goals).every(Boolean);
+    case 2: {
+      const hasIncome = c.income.monthlyTakeHome;
+      const hasExpenses = c.expenses.monthlyExpenses;
+      // At least ONE investment type addressed (user may not have all types)
+      const hasAnyInvestment = Object.values(c.investments).some(Boolean);
+      // Insurance discussed
+      const hasInsurance =
+        c.insurance.healthInsurance || c.insurance.lifeInsurance;
+      return hasIncome && hasExpenses && hasAnyInvestment && hasInsurance;
+    }
+
+    case 3: {
+      // At least goals OR risk profile discussed
+      return c.goals.goalsOrHurdleRate || c.goals.riskProfile;
+    }
 
     case 4:
       return true; // Summary chapter, always "complete"

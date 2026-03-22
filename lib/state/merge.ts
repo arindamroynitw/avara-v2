@@ -18,6 +18,7 @@ const FIELD_TO_COLLECTED: Record<string, [string, string]> = {
   dependents: ["personal", "dependents"],
   employer: ["personal", "employer"],
   industry: ["personal", "industry"],
+  role: ["personal", "employer"], // role also counts toward employer being discussed
   housing: ["personal", "housing"],
   parentSituation: ["personal", "parentSituation"],
   parentFinanciallyIndependent: ["personal", "parentSituation"],

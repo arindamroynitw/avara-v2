@@ -6,9 +6,8 @@ export function evaluateUploadCards(
 ): ComponentInjection[] {
   const components: ComponentInjection[] = [];
 
-  // Bank statement — after income discussed in Chapter 2
+  // Bank statement — after income discussed (ANY chapter, not just Ch2)
   if (
-    state.currentChapter === 2 &&
     state.collected.income.monthlyTakeHome &&
     state.documents.bankStatement === "not_uploaded"
   ) {
@@ -26,9 +25,8 @@ export function evaluateUploadCards(
     });
   }
 
-  // MF statement — after mutual funds discussed
+  // MF statement — after mutual funds mentioned (ANY chapter)
   if (
-    state.currentChapter === 2 &&
     state.collected.investments.mutualFunds &&
     state.documents.mfStatement === "not_uploaded"
   ) {
@@ -47,9 +45,8 @@ export function evaluateUploadCards(
     });
   }
 
-  // Demat statement — after stocks discussed
+  // Demat statement — after stocks mentioned (ANY chapter)
   if (
-    state.currentChapter === 2 &&
     state.collected.investments.stocks &&
     state.documents.dematStatement === "not_uploaded"
   ) {
