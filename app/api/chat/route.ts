@@ -87,13 +87,26 @@ export async function POST(req: Request) {
     return new Response("Failed to load conversation state", { status: 500 });
   }
 
-  // ── 4. Get user's latest message ──
+  // ── 4. Get user's latest message + preceding assistant message for extraction context ──
   const lastUserMessage = uiMessages[uiMessages.length - 1];
   const userText =
     lastUserMessage?.parts
       ?.filter((p) => p.type === "text")
       .map((p) => (p as { type: "text"; text: string }).text)
       .join("") || "";
+
+  // Find the last assistant message BEFORE the user's message — this is Ria's question
+  // that gives context to bare answers like "100000", "Yes", "Renting"
+  let precedingAssistantText: string | undefined;
+  for (let i = uiMessages.length - 2; i >= 0; i--) {
+    if (uiMessages[i].role === "assistant") {
+      precedingAssistantText = uiMessages[i].parts
+        ?.filter((p) => p.type === "text")
+        .map((p) => (p as { type: "text"; text: string }).text)
+        .join("") || undefined;
+      break;
+    }
+  }
 
   console.log(
     `[CHAT] User ${userId.substring(0, 8)}... | Ch${conversationState.currentChapter} | "${userText.substring(0, 80)}${userText.length > 80 ? "..." : ""}" | ${uiMessages.length} client msgs`
@@ -242,7 +255,7 @@ export async function POST(req: Request) {
 
   const extractionPromise = isSystemTrigger
     ? Promise.resolve({ extractedFields: {} })
-    : extractStructuredData(userText, conversationState);
+    : extractStructuredData(userText, conversationState, precedingAssistantText);
 
   // ── 9. Create UI message stream ──
   const stream = createUIMessageStream({
