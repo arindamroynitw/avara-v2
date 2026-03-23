@@ -387,71 +387,61 @@ export async function POST(req: Request) {
           } as never);
         }
 
-        // ── Post-stream: fire-and-forget to avoid timeout ──
-        // On Vercel Hobby (10s limit), we can't afford to await DB writes
-        // after the stream is done. Fire them all without await.
-        // The state save is the ONLY critical one — do it first.
+        // ── Post-stream operations — all awaited for data integrity ──
+        // A slow but correct response is better than a fast one that loses data.
+        // If Vercel Hobby's 10s timeout kills us here, upgrading to Pro ($20/mo)
+        // is the real fix — not skipping critical writes.
 
-        console.log(`[CHAT] ${elapsed()} | Stream+rules done, firing post-ops`);
+        console.log(`[CHAT] ${elapsed()} | Stream+rules done, saving state`);
 
-        // State save — critical, await this one
         try {
           await saveConversationState(userId, updatedState);
         } catch (err) {
           console.error("[CHAT] Failed to save state:", err);
         }
 
-        // Everything else: fire without awaiting
-        const postOps: Promise<void>[] = [];
+        try {
+          const fullText = await result.text;
+          await saveMessage(userId, {
+            role: "assistant",
+            content: fullText,
+            messageType: "text",
+            metadata: components.length > 0 ? { components } : {},
+            chapter: updatedState.currentChapter,
+          });
+        } catch (err) {
+          console.error("[CHAT] Failed to save assistant msg:", err);
+        }
 
-        // Save assistant message
-        postOps.push(
-          (async () => {
-            const fullText = await result.text;
-            await saveMessage(userId, {
-              role: "assistant",
-              content: fullText,
-              messageType: "text",
-              metadata: components.length > 0 ? { components } : {},
-              chapter: updatedState.currentChapter,
-            });
-          })().catch((err) =>
-            console.error("[CHAT] Failed to save assistant msg:", err)
-          )
-        );
-
-        // Profile commit
         if (
           !chapterTransitioned &&
           Object.keys(extraction.extractedFields).length > 0
         ) {
-          postOps.push(
-            commitChapterToProfile(userId, extraction.extractedFields).catch(
-              (err) => console.error("[CHAT] Profile commit failed:", err)
-            )
-          );
+          try {
+            await commitChapterToProfile(userId, extraction.extractedFields);
+          } catch (err) {
+            console.error("[CHAT] Profile commit failed:", err);
+          }
         }
 
         // Rolling summary every 10 messages
         if (messageCount > 0 && messageCount % 10 === 0) {
-          postOps.push(
-            (async () => {
-              const { loadRecentMessages } = await import(
-                "@/lib/state/messages"
-              );
-              const recentMsgs = await loadRecentMessages(userId, 10);
-              const newSummary = await generateRollingSummary(
-                summary,
-                recentMsgs.map((m) => ({ role: m.role, content: m.content }))
-              );
-              await saveSummary(userId, newSummary);
-              console.log(
-                `[CHAT] Rolling summary updated at msg ${messageCount}`
-              );
-            })().catch((err) =>
-              console.error("[CHAT] Rolling summary failed:", err)
-            )
-          );
+          try {
+            const { loadRecentMessages } = await import(
+              "@/lib/state/messages"
+            );
+            const recentMsgs = await loadRecentMessages(userId, 10);
+            const newSummary = await generateRollingSummary(
+              summary,
+              recentMsgs.map((m) => ({ role: m.role, content: m.content }))
+            );
+            await saveSummary(userId, newSummary);
+            console.log(
+              `[CHAT] Rolling summary updated at msg ${messageCount}`
+            );
+          } catch (err) {
+            console.error("[CHAT] Rolling summary failed:", err);
+          }
         }
 
         // Onboarding completion check
@@ -466,27 +456,20 @@ export async function POST(req: Request) {
           ];
           const userLower = userText.toLowerCase();
           if (confirmWords.some((w) => userLower.includes(w))) {
-            postOps.push(
-              (async () => {
-                await supabase
-                  .from("users")
-                  .update({ onboarding_status: "completed" })
-                  .eq("id", userId);
-                console.log(
-                  `[CHAT] Onboarding completed for ${userId.substring(0, 8)}...`
-                );
-              })().catch((err) =>
-                console.error("[CHAT] Completion update failed:", err)
-              )
-            );
+            try {
+              const supabase2 = await createClient();
+              await supabase2
+                .from("users")
+                .update({ onboarding_status: "completed" })
+                .eq("id", userId);
+              console.log(
+                `[CHAT] Onboarding completed for ${userId.substring(0, 8)}...`
+              );
+            } catch (err) {
+              console.error("[CHAT] Completion update failed:", err);
+            }
           }
         }
-
-        // Wait for post-ops with a 3-second timeout to avoid Vercel killing us
-        await Promise.race([
-          Promise.allSettled(postOps),
-          new Promise((resolve) => setTimeout(resolve, 3000)),
-        ]);
 
         console.log(
           `[CHAT] ${elapsed()} | DONE | Ch${updatedState.currentChapter} | collected: ${Object.entries(updatedState.collected).flatMap(([, items]) => Object.values(items as Record<string, boolean>).filter(Boolean)).length}/${collectedSummaryParts.length + missingSummaryParts.length}`

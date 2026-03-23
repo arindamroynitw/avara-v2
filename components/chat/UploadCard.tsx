@@ -116,9 +116,14 @@ export function UploadCard({
         </button>
 
         {expanded && (
-          <p className="text-xs text-[#6B7280] mt-1.5 leading-relaxed">
-            {howToGet}
-          </p>
+          <div className="text-xs text-[#6B7280] mt-1.5 leading-relaxed space-y-2">
+            <p>{howToGet}</p>
+            <p className="text-[#E94560] font-medium">
+              Password-protected? Please remove the password before uploading.
+              Most bank statement passwords are: first 3 letters of your name
+              (CAPS) + date of birth (DDMMYYYY).
+            </p>
+          </div>
         )}
 
         {/* Data safety */}
