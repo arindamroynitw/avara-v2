@@ -205,6 +205,33 @@ export async function POST(req: Request) {
   const minViableComplete = isMinimumViableComplete(conversationState);
   conversationState.minimumViableComplete = minViableComplete;
 
+  // Pre-detect upload cards that will fire based on current state.
+  // This lets us tell Ria to weave the document ask into her response
+  // so the upload card appears in context, not alongside an unrelated question.
+  const pendingUploadCards: string[] = [];
+  const alreadyShown = conversationState.componentsShown || [];
+  if (
+    conversationState.collected.income.monthlyTakeHome &&
+    conversationState.documents.bankStatement === "not_uploaded" &&
+    !alreadyShown.includes("upload_card:bank_statement")
+  ) {
+    pendingUploadCards.push("bank_statement");
+  }
+  if (
+    conversationState.collected.investments.mutualFunds &&
+    conversationState.documents.mfStatement === "not_uploaded" &&
+    !alreadyShown.includes("upload_card:mf_statement")
+  ) {
+    pendingUploadCards.push("mf_statement");
+  }
+  if (
+    conversationState.collected.investments.stocks &&
+    conversationState.documents.dematStatement === "not_uploaded" &&
+    !alreadyShown.includes("upload_card:demat_statement")
+  ) {
+    pendingUploadCards.push("demat_statement");
+  }
+
   const systemPrompt =
     buildSystemPrompt({
       userName,
@@ -222,6 +249,7 @@ export async function POST(req: Request) {
       minimumViableMissing: minViableComplete
         ? undefined
         : getMinimumViableMissing(conversationState),
+      pendingUploadCards: pendingUploadCards.length > 0 ? pendingUploadCards : undefined,
     }) + documentContext;
 
   // ── 7. Convert messages for model — TRIM to last N ──

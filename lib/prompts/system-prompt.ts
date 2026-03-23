@@ -8,6 +8,7 @@ export function buildSystemPrompt(params: {
   isReturningUser?: boolean;
   minimumViableComplete?: boolean;
   minimumViableMissing?: string[];
+  pendingUploadCards?: string[]; // document types about to be shown as upload cards
 }): string {
   return `You are Ria, a financial advisor at Avara — a SEBI-registered investment advisor.
 
@@ -105,7 +106,7 @@ If the user's message is exactly "[SESSION_START]", this is a new conversation s
 - Don't use markdown, bullet points, or structured formatting in responses
 - Don't ask multiple questions in one message
 - Don't summarize what you just did at the end of responses
-${buildDataTrackingSection(params)}${params.rollingSummary ? `\n## CONVERSATION CONTEXT\n${params.rollingSummary}\n` : ""}${params.currentChapter === 4 ? buildChapter4Instructions(params) : ""}${params.isReturningUser ? buildReturningUserInstructions(params) : ""}`;
+${buildDataTrackingSection(params)}${buildUploadCardContext(params.pendingUploadCards)}${params.rollingSummary ? `\n## CONVERSATION CONTEXT\n${params.rollingSummary}\n` : ""}${params.currentChapter === 4 ? buildChapter4Instructions(params) : ""}${params.isReturningUser ? buildReturningUserInstructions(params) : ""}`;
 }
 
 // Maps raw field paths to human-readable questions Ria should ask
@@ -186,6 +187,28 @@ function buildDataTrackingSection(params: {
   }
 
   return section;
+}
+
+const UPLOAD_CARD_PROMPTS: Record<string, string> = {
+  bank_statement:
+    "The user just shared their income. A bank statement upload card will appear below your response. IMPORTANT: Your response should naturally transition toward the bank statement — mention that if they can share their last 3 months' bank statement, you can see real spending patterns, SIP debits, and EMIs without them having to estimate. Don't ask another unrelated question in this response. End with something like 'If you can share your bank statement, I can see the real picture — but no pressure, we can also go through it together.'",
+  mf_statement:
+    "The user just mentioned mutual fund investments. A mutual fund statement upload card will appear below your response. IMPORTANT: Your response should naturally reference the MF statement — mention that a CAMS or KFintech consolidated statement would let you see every fund, every SIP, and the actual returns. End with something like 'If you have your consolidated MF statement handy, I can get the exact picture — otherwise just share what you remember.'",
+  demat_statement:
+    "The user just mentioned stock investments. A demat holding statement upload card will appear below your response. IMPORTANT: Your response should reference the demat statement — mention that a holding report from their broker would show exact positions and values. End with something like 'If you can share your holdings report from Zerodha/Groww/your broker, that would be really helpful.'",
+};
+
+function buildUploadCardContext(
+  pendingUploadCards?: string[]
+): string {
+  if (!pendingUploadCards || pendingUploadCards.length === 0) return "";
+
+  // Only include the FIRST pending card — one upload ask at a time
+  const firstCard = pendingUploadCards[0];
+  const prompt = UPLOAD_CARD_PROMPTS[firstCard];
+  if (!prompt) return "";
+
+  return `\n## DOCUMENT UPLOAD MOMENT\n${prompt}\n`;
 }
 
 function buildChapter4Instructions(params: {
