@@ -4,41 +4,54 @@ import type { BankStatementParsed } from "@/lib/types/documents";
 
 const client = new OpenAI();
 
+/**
+ * Parse a bank statement using GPT-4o vision.
+ * Accepts either a raw PDF buffer OR pre-decoded base64 PNG images.
+ * Pre-decoded images come from client-side decryption of password-protected PDFs.
+ */
 export async function parseBankStatement(
-  pdfBuffer: Buffer
+  pdfBuffer: Buffer | null,
+  base64Images: string[] | null = null
 ): Promise<BankStatementParsed> {
-  const fileSizeKB = Math.round(pdfBuffer.length / 1024);
-  console.log(`[PARSE:bank] Starting, PDF: ${fileSizeKB}KB`);
+  console.log(
+    `[PARSE:bank] Starting, mode=${base64Images ? `images(${base64Images.length})` : `pdf(${pdfBuffer ? Math.round(pdfBuffer.length / 1024) : 0}KB)`}`
+  );
 
   try {
-    // Upload file to OpenAI Files API first, then reference by file_id.
-    // The inline file_data approach returns 500 errors intermittently.
-    const blob = new Blob([new Uint8Array(pdfBuffer)], {
-      type: "application/pdf",
-    });
-    const file = await client.files.create({
-      file: new File([blob], "bank_statement.pdf", {
-        type: "application/pdf",
-      }),
-      purpose: "assistants",
-    });
+    // Build content parts — either from pre-decoded images or by uploading PDF
+    let contentParts: OpenAI.Chat.Completions.ChatCompletionContentPart[];
 
-    console.log(`[PARSE:bank] File uploaded to OpenAI: ${file.id}`);
+    if (base64Images && base64Images.length > 0) {
+      // Pre-decoded images from client-side PDF rendering
+      contentParts = base64Images.map((b64) => ({
+        type: "image_url" as const,
+        image_url: { url: `data:image/png;base64,${b64}` },
+      }));
+    } else if (pdfBuffer) {
+      // Upload PDF to OpenAI Files API
+      const blob = new Blob([new Uint8Array(pdfBuffer)], {
+        type: "application/pdf",
+      });
+      const file = await client.files.create({
+        file: new File([blob], "bank_statement.pdf", {
+          type: "application/pdf",
+        }),
+        purpose: "assistants",
+      });
+      console.log(`[PARSE:bank] File uploaded: ${file.id}`);
+      contentParts = [
+        { type: "file" as const, file: { file_id: file.id } },
+      ] as unknown as OpenAI.Chat.Completions.ChatCompletionContentPart[];
+    } else {
+      throw new Error("No PDF buffer or images provided");
+    }
 
     const response = await client.chat.completions.create({
       model: "gpt-4o",
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: buildBankStatementPrompt() },
-        {
-          role: "user",
-          content: [
-            {
-              type: "file" as const,
-              file: { file_id: file.id },
-            },
-          ],
-        },
+        { role: "user", content: contentParts },
       ],
       temperature: 0,
       max_tokens: 4000,
@@ -47,13 +60,6 @@ export async function parseBankStatement(
     console.log(
       `[PARSE:bank] OK, tokens: ${response.usage?.total_tokens}, finish: ${response.choices[0]?.finish_reason}`
     );
-
-    // Clean up the uploaded file
-    try {
-      await client.files.delete(file.id);
-    } catch {
-      // Non-fatal — file will auto-expire
-    }
 
     const content = response.choices[0].message.content || "{}";
     const parsed = JSON.parse(content);

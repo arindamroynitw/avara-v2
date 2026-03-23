@@ -49,7 +49,7 @@ function ChatView({ initialMessages }: { initialMessages: UIMessage[] }) {
   });
 
   const [input, setInput] = useState("");
-  const { uploadDocument, isUploading } = useDocumentUpload();
+  const { uploadDocument, uploadImages, isUploading } = useDocumentUpload();
   const [uploadingDocType, setUploadingDocType] = useState<string | null>(null);
 
   // ── Voice State ──
@@ -213,6 +213,25 @@ function ChatView({ initialMessages }: { initialMessages: UIMessage[] }) {
     [uploadDocument, sendMessage]
   );
 
+  // Handle pre-decoded images from client-side PDF decryption
+  const handleUploadImages = useCallback(
+    async (images: Blob[], documentType: string, fileName: string) => {
+      setUploadingDocType(documentType);
+      const result = await uploadImages(images, documentType, fileName);
+      setUploadingDocType(null);
+      if (result && result.status === "parsed") {
+        sendMessage({
+          text: `[DOCUMENT_PARSED:${documentType}:${result.documentId}]`,
+        });
+      } else if (result && result.status === "failed") {
+        sendMessage({
+          text: `[DOCUMENT_FAILED:${documentType}]`,
+        });
+      }
+    },
+    [uploadImages, sendMessage]
+  );
+
   // Handle file from ChatInput paperclip
   const handleFileUpload = useCallback(
     (file: File) => {
@@ -289,6 +308,7 @@ function ChatView({ initialMessages }: { initialMessages: UIMessage[] }) {
         isLoading={isLoading}
         onQuickReplySelect={handleQuickReplySelect}
         onUpload={handleUpload}
+        onUploadImages={handleUploadImages}
         onStartVoiceCall={() => handleStartVoiceCall("suggestion_card")}
         uploadingDocType={uploadingDocType}
       />

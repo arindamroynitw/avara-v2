@@ -15,6 +15,7 @@ interface MessageRendererProps {
   message: UIMessage;
   onQuickReplySelect: (option: string) => void;
   onUpload?: (file: File, documentType: string) => Promise<void>;
+  onUploadImages?: (images: Blob[], documentType: string, fileName: string) => Promise<void>;
   onStartVoiceCall?: () => void;
   uploadingDocType?: string | null;
 }
@@ -23,6 +24,7 @@ export function MessageRenderer({
   message,
   onQuickReplySelect,
   onUpload,
+  onUploadImages,
   onStartVoiceCall,
   uploadingDocType,
 }: MessageRendererProps) {
@@ -69,6 +71,7 @@ export function MessageRenderer({
                   howToGet={p.data.howToGet as string}
                   dataReassurance={p.data.dataReassurance as string}
                   onUpload={onUpload}
+                  onUploadImages={onUploadImages}
                   uploadStatus={
                     uploadingDocType === (p.data.documentType as string)
                       ? "uploading"

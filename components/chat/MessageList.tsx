@@ -11,6 +11,7 @@ interface MessageListProps {
   isLoading: boolean;
   onQuickReplySelect: (option: string) => void;
   onUpload?: (file: File, documentType: string) => Promise<void>;
+  onUploadImages?: (images: Blob[], documentType: string, fileName: string) => Promise<void>;
   onStartVoiceCall?: () => void;
   uploadingDocType?: string | null;
 }
@@ -20,6 +21,7 @@ export function MessageList({
   isLoading,
   onQuickReplySelect,
   onUpload,
+  onUploadImages,
   onStartVoiceCall,
   uploadingDocType,
 }: MessageListProps) {
@@ -39,6 +41,7 @@ export function MessageList({
                 message={message}
                 onQuickReplySelect={onQuickReplySelect}
                 onUpload={onUpload}
+                onUploadImages={onUploadImages}
                 onStartVoiceCall={onStartVoiceCall}
                 uploadingDocType={uploadingDocType}
               />

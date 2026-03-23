@@ -14,15 +14,9 @@ import {
   saveConversationState,
 } from "@/lib/state/manager";
 
-export const maxDuration = 60; // Allow up to 60s for PDF parsing
+export const maxDuration = 60;
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-const ALLOWED_TYPES = [
-  "application/pdf",
-  "image/png",
-  "image/jpeg",
-  "image/jpg",
-];
 
 export async function POST(req: Request) {
   // 1. Auth
@@ -36,71 +30,112 @@ export async function POST(req: Request) {
 
   // 2. Parse form data
   const formData = await req.formData();
-  const file = formData.get("file") as File | null;
   const documentType = formData.get("documentType") as string | null;
+  const inputType = (formData.get("inputType") as string) || "file";
 
-  if (!file || !documentType) {
-    return Response.json(
-      { error: "Missing file or documentType" },
-      { status: 400 }
-    );
+  if (!documentType) {
+    return Response.json({ error: "Missing documentType" }, { status: 400 });
   }
 
-  // 3. Validate
-  if (file.size > MAX_FILE_SIZE) {
-    return Response.json(
-      { error: "File too large. Maximum 10MB." },
-      { status: 400 }
-    );
-  }
-  if (!ALLOWED_TYPES.includes(file.type)) {
-    return Response.json(
-      { error: "Only PDF, PNG, and JPEG files are accepted." },
-      { status: 400 }
-    );
-  }
-
-  // 4. Upload to Supabase Storage
   const adminClient = getAdminClient();
   const timestamp = Date.now();
-  const storagePath = `${user.id}/${documentType}/${timestamp}_${file.name}`;
 
-  console.log(`[UPLOAD] User ${user.id}: ${documentType}, file="${file.name}", size=${file.size}, type=${file.type}`);
+  let storagePath: string;
+  let fileSize: number;
+  let originalFileName: string;
+  let base64Images: string[] | null = null;
+  let pdfBuffer: Buffer | null = null;
 
-  const fileBuffer = Buffer.from(await file.arrayBuffer());
-  console.log(`[UPLOAD] Buffer created: ${fileBuffer.length} bytes`);
+  if (inputType === "images") {
+    // ── Client-decoded images (from password-protected PDFs) ──
+    const images = formData.getAll("images") as File[];
+    originalFileName =
+      (formData.get("fileName") as string) || "document.pdf";
 
-  const { error: uploadError } = await adminClient.storage
-    .from("documents")
-    .upload(storagePath, fileBuffer, {
-      contentType: file.type,
-      upsert: false,
-    });
+    if (!images.length) {
+      return Response.json({ error: "No images provided" }, { status: 400 });
+    }
 
-  if (uploadError) {
-    console.error(`[UPLOAD] Storage upload FAILED:`, uploadError);
-    return Response.json(
-      { error: "Failed to upload file." },
-      { status: 500 }
+    console.log(
+      `[UPLOAD] User ${user.id.substring(0, 8)}...: ${documentType} (${images.length} decoded images from "${originalFileName}")`
     );
+
+    // Convert each image to base64 for OpenAI
+    base64Images = [];
+    let totalSize = 0;
+    for (const img of images) {
+      const buf = Buffer.from(await img.arrayBuffer());
+      totalSize += buf.length;
+      base64Images.push(buf.toString("base64"));
+    }
+    fileSize = totalSize;
+
+    // Store the first image as a reference in Supabase Storage
+    const firstImage = images[0];
+    storagePath = `${user.id}/${documentType}/${timestamp}_${originalFileName.replace(".pdf", "")}_pages.png`;
+    const firstBuf = Buffer.from(await firstImage.arrayBuffer());
+    await adminClient.storage
+      .from("documents")
+      .upload(storagePath, firstBuf, {
+        contentType: "image/png",
+        upsert: false,
+      });
+  } else {
+    // ── Raw file upload (unprotected PDFs, images) ──
+    const file = formData.get("file") as File | null;
+    if (!file) {
+      return Response.json({ error: "Missing file" }, { status: 400 });
+    }
+
+    if (file.size > MAX_FILE_SIZE) {
+      return Response.json(
+        { error: "File too large. Maximum 10MB." },
+        { status: 400 }
+      );
+    }
+
+    originalFileName = file.name;
+    fileSize = file.size;
+    storagePath = `${user.id}/${documentType}/${timestamp}_${file.name}`;
+
+    console.log(
+      `[UPLOAD] User ${user.id.substring(0, 8)}...: ${documentType}, file="${file.name}", size=${file.size}`
+    );
+
+    pdfBuffer = Buffer.from(await file.arrayBuffer());
+
+    const { error: uploadError } = await adminClient.storage
+      .from("documents")
+      .upload(storagePath, pdfBuffer, {
+        contentType: file.type,
+        upsert: false,
+      });
+
+    if (uploadError) {
+      console.error(`[UPLOAD] Storage upload FAILED:`, uploadError);
+      return Response.json(
+        { error: "Failed to upload file." },
+        { status: 500 }
+      );
+    }
   }
 
-  // 5. Insert document record
+  // 3. Insert document record
   const { data: doc, error: insertError } = await supabase
     .from("uploaded_documents")
     .insert({
       user_id: user.id,
       document_type: documentType,
-      file_name: file.name,
+      file_name: originalFileName,
       storage_path: storagePath,
-      file_size: file.size,
+      file_size: fileSize,
       status: "processing",
     })
     .select("id")
     .single();
 
   if (insertError || !doc) {
-    console.error("Document insert error:", insertError);
+    console.error("[UPLOAD] Document insert error:", insertError);
     return Response.json(
       { error: "Failed to create document record." },
       { status: 500 }
@@ -109,34 +144,47 @@ export async function POST(req: Request) {
 
   const docId = doc.id;
 
-  // 6. Skip client-side encryption check — it had false positives.
-  // GPT-4o handles PDFs natively and will fail gracefully if it can't read one.
-  // If the PDF is truly password-locked (can't be opened at all), GPT-4o will
-  // return empty/error results, and our parser catch block handles that.
-
-  // 7. Parse document
-  console.log(`[UPLOAD] Starting parse for ${documentType}, docId=${docId}`);
+  // 4. Parse document
+  console.log(
+    `[UPLOAD] Starting parse for ${documentType}, docId=${docId}, mode=${base64Images ? "images" : "pdf"}`
+  );
   try {
     let parsedData: Record<string, unknown> = {};
     let state = await loadConversationState(user.id);
 
+    // Parse using either pre-decoded images or raw PDF
     switch (documentType) {
       case "bank_statement": {
-        const parsed = await parseBankStatement(fileBuffer);
+        const parsed = await parseBankStatement(pdfBuffer, base64Images);
         parsedData = parsed as unknown as Record<string, unknown>;
-        state = await materializeBankStatement(user.id, docId, parsed, state);
+        state = await materializeBankStatement(
+          user.id,
+          docId,
+          parsed,
+          state
+        );
         break;
       }
       case "mf_statement": {
-        const parsed = await parseMFStatement(fileBuffer);
+        const parsed = await parseMFStatement(pdfBuffer, base64Images);
         parsedData = parsed as unknown as Record<string, unknown>;
-        state = await materializeMFStatement(user.id, docId, parsed, state);
+        state = await materializeMFStatement(
+          user.id,
+          docId,
+          parsed,
+          state
+        );
         break;
       }
       case "demat_statement": {
-        const parsed = await parseDematStatement(fileBuffer);
+        const parsed = await parseDematStatement(pdfBuffer, base64Images);
         parsedData = parsed as unknown as Record<string, unknown>;
-        state = await materializeDematStatement(user.id, docId, parsed, state);
+        state = await materializeDematStatement(
+          user.id,
+          docId,
+          parsed,
+          state
+        );
         break;
       }
       default:
@@ -153,11 +201,13 @@ export async function POST(req: Request) {
       })
       .eq("id", docId);
 
-    // Save updated conversation state
     await saveConversationState(user.id, state);
 
-    // Generate summary for chat
     const summary = generateParsedSummary(documentType, parsedData);
+
+    console.log(
+      `[UPLOAD] Parse SUCCESS for ${documentType}, docId=${docId}`
+    );
 
     return Response.json({
       documentId: docId,
@@ -165,9 +215,11 @@ export async function POST(req: Request) {
       parsedData,
       summary,
     });
-    console.log(`[UPLOAD] Parse SUCCESS for ${documentType}, docId=${docId}`);
   } catch (error) {
-    console.error(`[UPLOAD] Parse FAILED for ${documentType}, docId=${docId}:`, error);
+    console.error(
+      `[UPLOAD] Parse FAILED for ${documentType}, docId=${docId}:`,
+      error
+    );
 
     await supabase
       .from("uploaded_documents")
