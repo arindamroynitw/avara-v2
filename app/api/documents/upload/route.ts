@@ -9,7 +9,6 @@ import {
   materializeDematStatement,
   generateParsedSummary,
 } from "@/lib/parsing/materialize";
-import { isPdfEncrypted } from "@/lib/parsing/pdf-to-images";
 import {
   loadConversationState,
   saveConversationState,
@@ -110,32 +109,10 @@ export async function POST(req: Request) {
 
   const docId = doc.id;
 
-  // 6. Check for password protection (PDF only)
-  if (file.type === "application/pdf") {
-    try {
-      const encrypted = await isPdfEncrypted(fileBuffer);
-      if (encrypted) {
-        await supabase
-          .from("uploaded_documents")
-          .update({
-            status: "failed",
-            error_message: "password_protected",
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", docId);
-
-        return Response.json({
-          documentId: docId,
-          status: "failed",
-          error: "password_protected",
-          message:
-            "This PDF is password-protected. Please upload an unprotected version.",
-        });
-      }
-    } catch {
-      // Continue — not a password issue
-    }
-  }
+  // 6. Skip client-side encryption check — it had false positives.
+  // GPT-4o handles PDFs natively and will fail gracefully if it can't read one.
+  // If the PDF is truly password-locked (can't be opened at all), GPT-4o will
+  // return empty/error results, and our parser catch block handles that.
 
   // 7. Parse document
   console.log(`[UPLOAD] Starting parse for ${documentType}, docId=${docId}`);
