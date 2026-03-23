@@ -1,133 +1,130 @@
 "use client";
 
+/**
+ * Client-side PDF text extraction with password support.
+ * Modeled on Sorted's proven implementation.
+ *
+ * Key insight: financial statements are structured text, not images.
+ * Extract text → send to GPT-4o chat API. No vision, no canvas, no base64 images.
+ */
+
 import { useState, useCallback } from "react";
-
-// pdfjs-dist loaded dynamically to keep bundle small
-let pdfjsLib: typeof import("pdfjs-dist") | null = null;
-
-async function loadPdfjs() {
-  if (pdfjsLib) return pdfjsLib;
-  pdfjsLib = await import("pdfjs-dist");
-  // Set worker source from CDN
-  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
-  return pdfjsLib;
-}
 
 export type PdfStatus =
   | "idle"
-  | "loading"
+  | "extracting"
   | "needs_password"
-  | "decrypting"
-  | "rendering"
+  | "wrong_password"
   | "ready"
   | "error";
 
 interface PdfProcessorResult {
   status: PdfStatus;
   error: string | null;
-  pageCount: number;
-  /** Process a PDF file — returns PNG blobs if successful, or null if password needed */
-  processFile: (file: File) => Promise<Blob[] | "needs_password">;
-  /** Retry with password after needs_password */
-  processWithPassword: (password: string) => Promise<Blob[]>;
-  /** Reset state */
+  /** Extract text from a PDF. Returns text string, or "needs_password" */
+  extractText: (file: File) => Promise<string | "needs_password">;
+  /** Retry extraction with a password */
+  extractWithPassword: (password: string) => Promise<string>;
   reset: () => void;
 }
 
-const RENDER_DPI = 150;
-const MAX_PAGES = 10;
+const MAX_PAGES = 20;
+
+// Lazy-load pdfjs-dist
+let pdfjsLoaded: typeof import("pdfjs-dist") | null = null;
+async function loadPdfjs() {
+  if (pdfjsLoaded) return pdfjsLoaded;
+  pdfjsLoaded = await import("pdfjs-dist");
+  pdfjsLoaded.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLoaded.version}/pdf.worker.min.mjs`;
+  return pdfjsLoaded;
+}
 
 export function usePdfProcessor(): PdfProcessorResult {
   const [status, setStatus] = useState<PdfStatus>("idle");
   const [error, setError] = useState<string | null>(null);
-  const [pageCount, setPageCount] = useState(0);
-  // Store the file buffer for retry with password
   const [pendingBuffer, setPendingBuffer] = useState<ArrayBuffer | null>(null);
 
   const reset = useCallback(() => {
     setStatus("idle");
     setError(null);
-    setPageCount(0);
     setPendingBuffer(null);
   }, []);
 
-  /**
-   * Render a loaded PDF document to PNG blobs
-   */
-  async function renderPages(
-    doc: import("pdfjs-dist").PDFDocumentProxy
-  ): Promise<Blob[]> {
-    setStatus("rendering");
-    const numPages = Math.min(doc.numPages, MAX_PAGES);
-    setPageCount(numPages);
+  async function doExtract(
+    buffer: ArrayBuffer,
+    password?: string
+  ): Promise<string | "needs_password" | "wrong_password"> {
+    const pdfjsLib = await loadPdfjs();
+    const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer) });
 
-    const blobs: Blob[] = [];
-    for (let i = 1; i <= numPages; i++) {
-      const page = await doc.getPage(i);
-      const viewport = page.getViewport({
-        scale: RENDER_DPI / 72, // PDF default is 72 DPI
-      });
+    // Handle password via onPassword callback (pdfjs-dist v5 pattern from Sorted)
+    let passwordResult: "needs_password" | "wrong_password" | null = null;
+    loadingTask.onPassword = (
+      updatePassword: (response: unknown) => void,
+      reason: number
+    ) => {
+      if (reason === 2) {
+        // Wrong password
+        passwordResult = "wrong_password";
+        updatePassword(new Error("Incorrect password"));
+      } else {
+        // Needs password
+        if (password) {
+          updatePassword(password);
+        } else {
+          passwordResult = "needs_password";
+          updatePassword(new Error("Password required"));
+        }
+      }
+    };
 
-      const canvas = document.createElement("canvas");
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-
-      const ctx = canvas.getContext("2d")!;
-      await page.render({ canvasContext: ctx, canvas, viewport } as Parameters<typeof page.render>[0]).promise;
-
-      const blob = await new Promise<Blob>((resolve, reject) => {
-        canvas.toBlob(
-          (b) => (b ? resolve(b) : reject(new Error("Canvas toBlob failed"))),
-          "image/png"
-        );
-      });
-
-      blobs.push(blob);
-
-      // Clean up
-      canvas.remove();
+    let pdf;
+    try {
+      pdf = await loadingTask.promise;
+    } catch {
+      if (passwordResult) return passwordResult;
+      throw new Error("Failed to read PDF");
     }
 
-    setStatus("ready");
-    return blobs;
+    // Extract text from each page
+    const maxPages = Math.min(pdf.numPages, MAX_PAGES);
+    let fullText = "";
+
+    for (let i = 1; i <= maxPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items
+        .map((item) => ("str" in item ? item.str : ""))
+        .join(" ");
+      fullText += pageText + "\n\n";
+    }
+
+    return fullText.trim();
   }
 
-  /**
-   * Try to load and render a PDF. Returns PNG blobs or "needs_password".
-   */
-  const processFile = useCallback(
-    async (file: File): Promise<Blob[] | "needs_password"> => {
-      setStatus("loading");
+  const extractText = useCallback(
+    async (file: File): Promise<string | "needs_password"> => {
+      setStatus("extracting");
       setError(null);
 
       try {
-        const pdfjs = await loadPdfjs();
         const buffer = await file.arrayBuffer();
         setPendingBuffer(buffer);
 
-        try {
-          const doc = await pdfjs.getDocument({
-            data: new Uint8Array(buffer),
-          }).promise;
-
-          return await renderPages(doc);
-        } catch (err: unknown) {
-          // Check if it's a password error
-          const error = err as { name?: string; code?: number };
-          if (
-            error.name === "PasswordException" ||
-            error.code === 1 || // PasswordResponses.NEED_PASSWORD
-            (err instanceof Error &&
-              err.message.toLowerCase().includes("password"))
-          ) {
-            setStatus("needs_password");
-            return "needs_password";
-          }
-          throw err;
+        const result = await doExtract(buffer);
+        if (result === "needs_password") {
+          setStatus("needs_password");
+          return "needs_password";
         }
+        if (result === "wrong_password") {
+          setStatus("needs_password");
+          return "needs_password";
+        }
+
+        setStatus("ready");
+        return result;
       } catch (err) {
-        const msg =
-          err instanceof Error ? err.message : "Failed to process PDF";
+        const msg = err instanceof Error ? err.message : "Failed to read PDF";
         setError(msg);
         setStatus("error");
         throw new Error(msg);
@@ -136,39 +133,37 @@ export function usePdfProcessor(): PdfProcessorResult {
     []
   );
 
-  /**
-   * Retry loading with a password
-   */
-  const processWithPassword = useCallback(
-    async (password: string): Promise<Blob[]> => {
-      if (!pendingBuffer) {
-        throw new Error("No pending PDF to decrypt");
-      }
+  const extractWithPassword = useCallback(
+    async (password: string): Promise<string> => {
+      if (!pendingBuffer) throw new Error("No pending PDF");
 
-      setStatus("decrypting");
+      setStatus("extracting");
       setError(null);
 
       try {
-        const pdfjs = await loadPdfjs();
-
-        const doc = await pdfjs.getDocument({
-          data: new Uint8Array(pendingBuffer),
-          password,
-        }).promise;
-
-        return await renderPages(doc);
-      } catch (err: unknown) {
-        const error = err as { name?: string; code?: number };
-        if (
-          error.name === "PasswordException" ||
-          error.code === 2 // PasswordResponses.INCORRECT_PASSWORD
-        ) {
-          setError("Incorrect password. Please try again.");
-          setStatus("needs_password");
-          throw new Error("Incorrect password");
+        const result = await doExtract(pendingBuffer, password);
+        if (result === "wrong_password") {
+          setError("Wrong password. Please try again.");
+          setStatus("wrong_password");
+          throw new Error("Wrong password");
         }
-        const msg =
-          err instanceof Error ? err.message : "Failed to decrypt PDF";
+        if (result === "needs_password") {
+          setError("Password required.");
+          setStatus("needs_password");
+          throw new Error("Password required");
+        }
+
+        setStatus("ready");
+        return result;
+      } catch (err) {
+        if (
+          err instanceof Error &&
+          (err.message === "Wrong password" ||
+            err.message === "Password required")
+        ) {
+          throw err;
+        }
+        const msg = err instanceof Error ? err.message : "Failed to read PDF";
         setError(msg);
         setStatus("error");
         throw new Error(msg);
@@ -177,12 +172,5 @@ export function usePdfProcessor(): PdfProcessorResult {
     [pendingBuffer]
   );
 
-  return {
-    status,
-    error,
-    pageCount,
-    processFile,
-    processWithPassword,
-    reset,
-  };
+  return { status, error, extractText, extractWithPassword, reset };
 }

@@ -18,10 +18,8 @@ interface UploadCardProps {
   rationale: string;
   howToGet: string;
   dataReassurance: string;
-  onUpload?: (file: File, documentType: string) => Promise<void>;
-  /** New: upload pre-decoded PNG images instead of the raw PDF */
-  onUploadImages?: (
-    images: Blob[],
+  onUploadText?: (
+    text: string,
     documentType: string,
     fileName: string
   ) => Promise<void>;
@@ -39,8 +37,7 @@ export function UploadCard({
   rationale,
   howToGet,
   dataReassurance,
-  onUpload,
-  onUploadImages,
+  onUploadText,
   uploadStatus = "idle",
 }: UploadCardProps) {
   const [expanded, setExpanded] = useState(false);
@@ -53,11 +50,9 @@ export function UploadCard({
   const pdf = usePdfProcessor();
   const isUploading = uploadStatus === "uploading";
   const isUploaded = uploadStatus === "success";
-  const needsPassword = pdf.status === "needs_password";
-  const isProcessing =
-    pdf.status === "loading" ||
-    pdf.status === "decrypting" ||
-    pdf.status === "rendering";
+  const needsPassword =
+    pdf.status === "needs_password" || pdf.status === "wrong_password";
+  const isProcessing = pdf.status === "extracting";
 
   function handleUploadClick() {
     if (!isUploading && !isUploaded && !isProcessing && !needsPassword) {
@@ -67,84 +62,68 @@ export function UploadCard({
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || !onUploadText) return;
 
     setFileName(file.name);
 
-    // For non-PDF files (PNG, JPG), skip PDF processing
     if (!file.name.toLowerCase().endsWith(".pdf")) {
-      if (onUpload) await onUpload(file, documentType);
+      // Non-PDF: read as text and send directly
+      const text = await file.text();
+      await onUploadText(text, documentType, file.name);
       return;
     }
 
-    // Try to process PDF client-side
-    try {
-      const result = await pdf.processFile(file);
-      if (result === "needs_password") {
-        // UI will show password field
-        return;
-      }
-      // PDF decoded successfully — upload as images
-      if (onUploadImages) {
-        await onUploadImages(result, documentType, file.name);
-      } else if (onUpload) {
-        await onUpload(file, documentType);
-      }
-    } catch {
-      // PDF processing failed — fall back to raw upload
-      if (onUpload) await onUpload(file, documentType);
-    }
+    // Extract text from PDF client-side
+    const result = await pdf.extractText(file);
+    if (result === "needs_password") return; // UI shows password field
 
+    // Text extracted — send to server for GPT parsing
+    await onUploadText(result, documentType, file.name);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
   async function handlePasswordSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!password.trim()) return;
+    if (!password.trim() || !onUploadText) return;
 
     try {
-      const images = await pdf.processWithPassword(password.trim());
-      // Success — upload the decrypted images
-      if (onUploadImages) {
-        await onUploadImages(images, documentType, fileName);
-      }
+      const text = await pdf.extractWithPassword(password.trim());
+      await onUploadText(text, documentType, fileName);
       setPassword("");
     } catch {
-      // Error is shown via pdf.error — user can retry
+      // Error shown via pdf.error
     }
   }
 
   return (
     <div className="ml-10 my-2 bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden max-w-[85%]">
-      {/* Coral accent bar */}
       <div className="h-1 bg-[#E94560]" />
 
       <div className="p-4">
-        {/* Header */}
         <div className="flex items-center gap-2 mb-2">
           <Upload size={18} className="text-[#0F3460]" />
           <h4 className="font-semibold text-sm text-[#1A1A2E]">{label}</h4>
         </div>
 
-        {/* Rationale */}
         <p className="text-sm text-[#6B7280] mb-3">{rationale}</p>
 
-        {/* Hidden file input */}
         <input
           ref={fileInputRef}
           type="file"
-          accept=".pdf,.png,.jpg,.jpeg"
+          accept=".pdf,.xlsx,.xls,.csv"
           onChange={handleFileChange}
           className="hidden"
         />
 
-        {/* Password input — shown when PDF needs a password */}
+        {/* Password input */}
         {needsPassword && (
           <form onSubmit={handlePasswordSubmit} className="mb-3">
             <div className="flex items-center gap-2 mb-2">
               <Lock size={14} className="text-[#E94560]" />
               <span className="text-xs font-medium text-[#1A1A2E]">
-                This PDF is password-protected
+                {pdf.status === "wrong_password"
+                  ? "Wrong password — try again"
+                  : "This PDF is password-protected"}
               </span>
             </div>
             <div className="flex gap-2">
@@ -167,38 +146,30 @@ export function UploadCard({
               </div>
               <button
                 type="submit"
-                disabled={!password.trim() || pdf.status === "decrypting"}
+                disabled={!password.trim() || pdf.status === "extracting"}
                 className="px-4 py-2 text-sm font-medium text-white bg-[#0F3460] rounded-lg hover:bg-[#0c2a4e] disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {pdf.status === "decrypting" ? (
-                  <Loader2 size={14} className="animate-spin" />
-                ) : (
-                  "Unlock"
-                )}
+                Unlock
               </button>
             </div>
-            {pdf.error && (
-              <p className="text-xs text-[#E94560] mt-1.5">{pdf.error}</p>
-            )}
             <p className="text-[10px] text-[#6B7280] mt-1.5">
-              Most bank statement passwords: first 3 letters of your name
-              (CAPS) + DOB (DDMMYYYY). Password is used locally to decrypt —
-              never sent to our servers.
+              Common bank passwords: first 3 letters of name (CAPS) + DOB
+              (DDMMYYYY). Decrypted locally — never sent to our servers.
             </p>
           </form>
         )}
 
-        {/* Upload button — hidden when password is needed */}
+        {/* Upload button */}
         {!needsPassword && (
           <button
             onClick={handleUploadClick}
-            disabled={isUploading || isUploaded || isProcessing || !onUpload}
+            disabled={isUploading || isUploaded || isProcessing || !onUploadText}
             className={`w-full py-2.5 rounded-lg text-white text-sm font-medium flex items-center justify-center gap-2 transition ${
               isUploaded
                 ? "bg-[#059669] cursor-default"
                 : isUploading || isProcessing
                   ? "bg-[#0F3460] opacity-70 cursor-wait"
-                  : !onUpload
+                  : !onUploadText
                     ? "bg-[#0F3460] opacity-60 cursor-not-allowed"
                     : "bg-[#0F3460] hover:bg-[#0c2a4e] cursor-pointer"
             }`}
@@ -206,9 +177,7 @@ export function UploadCard({
             {isProcessing ? (
               <>
                 <Loader2 size={16} className="animate-spin" />
-                {pdf.status === "rendering"
-                  ? `Processing page ${pdf.pageCount}...`
-                  : "Reading PDF..."}
+                Reading PDF...
               </>
             ) : isUploading ? (
               <>
@@ -226,7 +195,6 @@ export function UploadCard({
           </button>
         )}
 
-        {/* How to get this — collapsible */}
         <button
           onClick={() => setExpanded(!expanded)}
           className="flex items-center gap-1 mt-3 text-xs text-[#0F3460] hover:underline cursor-pointer"
@@ -241,7 +209,6 @@ export function UploadCard({
           </p>
         )}
 
-        {/* Data safety */}
         <div className="flex items-center gap-1.5 mt-3 pt-3 border-t border-gray-50">
           <Shield size={12} className="text-[#059669] flex-shrink-0" />
           <p className="text-[10px] text-[#6B7280]">{dataReassurance}</p>

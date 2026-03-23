@@ -49,7 +49,7 @@ function ChatView({ initialMessages }: { initialMessages: UIMessage[] }) {
   });
 
   const [input, setInput] = useState("");
-  const { uploadDocument, uploadImages, isUploading } = useDocumentUpload();
+  const { uploadText, isUploading } = useDocumentUpload();
   const [uploadingDocType, setUploadingDocType] = useState<string | null>(null);
 
   // ── Voice State ──
@@ -194,11 +194,11 @@ function ChatView({ initialMessages }: { initialMessages: UIMessage[] }) {
     setVoiceIsSpeaking(false);
   }, [voiceElapsed, voiceSessionId, voiceConversationId, sendMessage]);
 
-  // Handle document upload from UploadCard or ChatInput attachment
-  const handleUpload = useCallback(
-    async (file: File, documentType: string) => {
+  // Handle document upload: text extracted client-side, sent for GPT parsing
+  const handleUploadText = useCallback(
+    async (text: string, documentType: string, fileName: string) => {
       setUploadingDocType(documentType);
-      const result = await uploadDocument(file, documentType);
+      const result = await uploadText(text, documentType, fileName);
       setUploadingDocType(null);
       if (result && result.status === "parsed") {
         sendMessage({
@@ -210,34 +210,15 @@ function ChatView({ initialMessages }: { initialMessages: UIMessage[] }) {
         });
       }
     },
-    [uploadDocument, sendMessage]
+    [uploadText, sendMessage]
   );
 
-  // Handle pre-decoded images from client-side PDF decryption
-  const handleUploadImages = useCallback(
-    async (images: Blob[], documentType: string, fileName: string) => {
-      setUploadingDocType(documentType);
-      const result = await uploadImages(images, documentType, fileName);
-      setUploadingDocType(null);
-      if (result && result.status === "parsed") {
-        sendMessage({
-          text: `[DOCUMENT_PARSED:${documentType}:${result.documentId}]`,
-        });
-      } else if (result && result.status === "failed") {
-        sendMessage({
-          text: `[DOCUMENT_FAILED:${documentType}]`,
-        });
-      }
-    },
-    [uploadImages, sendMessage]
-  );
-
-  // Handle file from ChatInput paperclip
+  // Handle file from ChatInput paperclip (not used for now — paperclip disabled)
   const handleFileUpload = useCallback(
-    (file: File) => {
-      handleUpload(file, "bank_statement");
+    (_file: File) => {
+      // Could implement text extraction here too if needed
     },
-    [handleUpload]
+    []
   );
 
   // Trigger Ria's opening message on first load (no history)
@@ -307,8 +288,7 @@ function ChatView({ initialMessages }: { initialMessages: UIMessage[] }) {
         messages={displayMessages}
         isLoading={isLoading}
         onQuickReplySelect={handleQuickReplySelect}
-        onUpload={handleUpload}
-        onUploadImages={handleUploadImages}
+        onUploadText={handleUploadText}
         onStartVoiceCall={() => handleStartVoiceCall("suggestion_card")}
         uploadingDocType={uploadingDocType}
       />

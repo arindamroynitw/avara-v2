@@ -1,5 +1,4 @@
 import { createClient } from "@/lib/supabase/server";
-import { getAdminClient } from "@/lib/supabase/admin";
 import { parseBankStatement } from "@/lib/parsing/bank-statement";
 import { parseMFStatement } from "@/lib/parsing/mf-statement";
 import { parseDematStatement } from "@/lib/parsing/demat-statement";
@@ -16,10 +15,12 @@ import {
 
 export const maxDuration = 60;
 
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-
+/**
+ * Document upload endpoint.
+ * Receives pre-extracted text from client-side PDF processing.
+ * Sends text to GPT-4o for structured parsing (no vision, no Files API).
+ */
 export async function POST(req: Request) {
-  // 1. Auth
   const supabase = await createClient();
   const {
     data: { user },
@@ -28,134 +29,65 @@ export async function POST(req: Request) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // 2. Parse form data
-  const formData = await req.formData();
-  const documentType = formData.get("documentType") as string | null;
-  const inputType = (formData.get("inputType") as string) || "file";
+  const { text, documentType, fileName } = await req.json();
 
-  if (!documentType) {
-    return Response.json({ error: "Missing documentType" }, { status: 400 });
+  if (!text || !documentType) {
+    return Response.json(
+      { error: "Missing text or documentType" },
+      { status: 400 }
+    );
   }
 
-  const adminClient = getAdminClient();
-  const timestamp = Date.now();
-
-  let storagePath: string;
-  let fileSize: number;
-  let originalFileName: string;
-  let base64Images: string[] | null = null;
-  let pdfBuffer: Buffer | null = null;
-
-  if (inputType === "images") {
-    // ── Client-decoded images (from password-protected PDFs) ──
-    const images = formData.getAll("images") as File[];
-    originalFileName =
-      (formData.get("fileName") as string) || "document.pdf";
-
-    if (!images.length) {
-      return Response.json({ error: "No images provided" }, { status: 400 });
-    }
-
-    console.log(
-      `[UPLOAD] User ${user.id.substring(0, 8)}...: ${documentType} (${images.length} decoded images from "${originalFileName}")`
+  if (text.length < 50) {
+    return Response.json(
+      {
+        documentId: null,
+        status: "failed",
+        error: "text_too_short",
+        message:
+          "Could not extract enough text from the PDF. The file might be scanned/image-based. Could you share the key details manually?",
+      },
+      { status: 400 }
     );
-
-    // Convert each image to base64 for OpenAI
-    base64Images = [];
-    let totalSize = 0;
-    for (const img of images) {
-      const buf = Buffer.from(await img.arrayBuffer());
-      totalSize += buf.length;
-      base64Images.push(buf.toString("base64"));
-    }
-    fileSize = totalSize;
-
-    // Store the first image as a reference in Supabase Storage
-    const firstImage = images[0];
-    storagePath = `${user.id}/${documentType}/${timestamp}_${originalFileName.replace(".pdf", "")}_pages.png`;
-    const firstBuf = Buffer.from(await firstImage.arrayBuffer());
-    await adminClient.storage
-      .from("documents")
-      .upload(storagePath, firstBuf, {
-        contentType: "image/png",
-        upsert: false,
-      });
-  } else {
-    // ── Raw file upload (unprotected PDFs, images) ──
-    const file = formData.get("file") as File | null;
-    if (!file) {
-      return Response.json({ error: "Missing file" }, { status: 400 });
-    }
-
-    if (file.size > MAX_FILE_SIZE) {
-      return Response.json(
-        { error: "File too large. Maximum 10MB." },
-        { status: 400 }
-      );
-    }
-
-    originalFileName = file.name;
-    fileSize = file.size;
-    storagePath = `${user.id}/${documentType}/${timestamp}_${file.name}`;
-
-    console.log(
-      `[UPLOAD] User ${user.id.substring(0, 8)}...: ${documentType}, file="${file.name}", size=${file.size}`
-    );
-
-    pdfBuffer = Buffer.from(await file.arrayBuffer());
-
-    const { error: uploadError } = await adminClient.storage
-      .from("documents")
-      .upload(storagePath, pdfBuffer, {
-        contentType: file.type,
-        upsert: false,
-      });
-
-    if (uploadError) {
-      console.error(`[UPLOAD] Storage upload FAILED:`, uploadError);
-      return Response.json(
-        { error: "Failed to upload file." },
-        { status: 500 }
-      );
-    }
   }
 
-  // 3. Insert document record
+  console.log(
+    `[UPLOAD] User ${user.id.substring(0, 8)}...: ${documentType}, file="${fileName}", text=${text.length} chars`
+  );
+
+  // Insert document record
   const { data: doc, error: insertError } = await supabase
     .from("uploaded_documents")
     .insert({
       user_id: user.id,
       document_type: documentType,
-      file_name: originalFileName,
-      storage_path: storagePath,
-      file_size: fileSize,
+      file_name: fileName || "document.pdf",
+      storage_path: `text_extract/${user.id}/${documentType}/${Date.now()}`,
+      file_size: text.length,
       status: "processing",
     })
     .select("id")
     .single();
 
   if (insertError || !doc) {
-    console.error("[UPLOAD] Document insert error:", insertError);
+    console.error("[UPLOAD] Insert error:", insertError);
     return Response.json(
-      { error: "Failed to create document record." },
+      { error: "Failed to create record" },
       { status: 500 }
     );
   }
 
   const docId = doc.id;
 
-  // 4. Parse document
-  console.log(
-    `[UPLOAD] Starting parse for ${documentType}, docId=${docId}, mode=${base64Images ? "images" : "pdf"}`
-  );
+  // Parse with GPT-4o (text mode, not vision)
+  console.log(`[UPLOAD] Parsing ${documentType}, docId=${docId}`);
   try {
     let parsedData: Record<string, unknown> = {};
     let state = await loadConversationState(user.id);
 
-    // Parse using either pre-decoded images or raw PDF
     switch (documentType) {
       case "bank_statement": {
-        const parsed = await parseBankStatement(pdfBuffer, base64Images);
+        const parsed = await parseBankStatement(text);
         parsedData = parsed as unknown as Record<string, unknown>;
         state = await materializeBankStatement(
           user.id,
@@ -166,7 +98,7 @@ export async function POST(req: Request) {
         break;
       }
       case "mf_statement": {
-        const parsed = await parseMFStatement(pdfBuffer, base64Images);
+        const parsed = await parseMFStatement(text);
         parsedData = parsed as unknown as Record<string, unknown>;
         state = await materializeMFStatement(
           user.id,
@@ -177,7 +109,7 @@ export async function POST(req: Request) {
         break;
       }
       case "demat_statement": {
-        const parsed = await parseDematStatement(pdfBuffer, base64Images);
+        const parsed = await parseDematStatement(text);
         parsedData = parsed as unknown as Record<string, unknown>;
         state = await materializeDematStatement(
           user.id,
@@ -191,7 +123,6 @@ export async function POST(req: Request) {
         throw new Error(`Unsupported document type: ${documentType}`);
     }
 
-    // Update document as parsed
     await supabase
       .from("uploaded_documents")
       .update({
@@ -205,9 +136,7 @@ export async function POST(req: Request) {
 
     const summary = generateParsedSummary(documentType, parsedData);
 
-    console.log(
-      `[UPLOAD] Parse SUCCESS for ${documentType}, docId=${docId}`
-    );
+    console.log(`[UPLOAD] SUCCESS ${documentType}, docId=${docId}`);
 
     return Response.json({
       documentId: docId,
@@ -216,17 +145,14 @@ export async function POST(req: Request) {
       summary,
     });
   } catch (error) {
-    console.error(
-      `[UPLOAD] Parse FAILED for ${documentType}, docId=${docId}:`,
-      error
-    );
+    console.error(`[UPLOAD] FAILED ${documentType}, docId=${docId}:`, error);
 
     await supabase
       .from("uploaded_documents")
       .update({
         status: "failed",
         error_message:
-          error instanceof Error ? error.message : "Unknown parsing error",
+          error instanceof Error ? error.message : "Unknown error",
         updated_at: new Date().toISOString(),
       })
       .eq("id", docId);

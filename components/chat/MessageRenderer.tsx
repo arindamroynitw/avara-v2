@@ -14,8 +14,7 @@ import { RiaAvatar } from "./RiaAvatar";
 interface MessageRendererProps {
   message: UIMessage;
   onQuickReplySelect: (option: string) => void;
-  onUpload?: (file: File, documentType: string) => Promise<void>;
-  onUploadImages?: (images: Blob[], documentType: string, fileName: string) => Promise<void>;
+  onUploadText?: (text: string, documentType: string, fileName: string) => Promise<void>;
   onStartVoiceCall?: () => void;
   uploadingDocType?: string | null;
 }
@@ -23,8 +22,7 @@ interface MessageRendererProps {
 export function MessageRenderer({
   message,
   onQuickReplySelect,
-  onUpload,
-  onUploadImages,
+  onUploadText,
   onStartVoiceCall,
   uploadingDocType,
 }: MessageRendererProps) {
@@ -70,8 +68,7 @@ export function MessageRenderer({
                   rationale={p.data.rationale as string}
                   howToGet={p.data.howToGet as string}
                   dataReassurance={p.data.dataReassurance as string}
-                  onUpload={onUpload}
-                  onUploadImages={onUploadImages}
+                  onUploadText={onUploadText}
                   uploadStatus={
                     uploadingDocType === (p.data.documentType as string)
                       ? "uploading"

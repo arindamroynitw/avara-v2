@@ -10,8 +10,7 @@ interface MessageListProps {
   messages: UIMessage[];
   isLoading: boolean;
   onQuickReplySelect: (option: string) => void;
-  onUpload?: (file: File, documentType: string) => Promise<void>;
-  onUploadImages?: (images: Blob[], documentType: string, fileName: string) => Promise<void>;
+  onUploadText?: (text: string, documentType: string, fileName: string) => Promise<void>;
   onStartVoiceCall?: () => void;
   uploadingDocType?: string | null;
 }
@@ -20,8 +19,7 @@ export function MessageList({
   messages,
   isLoading,
   onQuickReplySelect,
-  onUpload,
-  onUploadImages,
+  onUploadText,
   onStartVoiceCall,
   uploadingDocType,
 }: MessageListProps) {
@@ -40,8 +38,7 @@ export function MessageList({
               <MessageRenderer
                 message={message}
                 onQuickReplySelect={onQuickReplySelect}
-                onUpload={onUpload}
-                onUploadImages={onUploadImages}
+                onUploadText={onUploadText}
                 onStartVoiceCall={onStartVoiceCall}
                 uploadingDocType={uploadingDocType}
               />
