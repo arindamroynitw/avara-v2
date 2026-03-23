@@ -7,12 +7,23 @@ const client = new OpenAI();
 export async function parseMFStatement(
   pdfBuffer: Buffer
 ): Promise<MFStatementParsed> {
-  const base64 = pdfBuffer.toString("base64");
   const fileSizeKB = Math.round(pdfBuffer.length / 1024);
-
-  console.log(`[PARSE:mf_statement] Starting parse, PDF size: ${fileSizeKB}KB, base64 length: ${base64.length}`);
+  console.log(`[PARSE:mf] Starting, PDF: ${fileSizeKB}KB`);
 
   try {
+    // Upload file to OpenAI Files API first, then reference by file_id.
+    const blob = new Blob([new Uint8Array(pdfBuffer)], {
+      type: "application/pdf",
+    });
+    const file = await client.files.create({
+      file: new File([blob], "mf_statement.pdf", {
+        type: "application/pdf",
+      }),
+      purpose: "assistants",
+    });
+
+    console.log(`[PARSE:mf] File uploaded to OpenAI: ${file.id}`);
+
     const response = await client.chat.completions.create({
       model: "gpt-4o",
       response_format: { type: "json_object" },
@@ -23,10 +34,7 @@ export async function parseMFStatement(
           content: [
             {
               type: "file" as const,
-              file: {
-                file_data: `data:application/pdf;base64,${base64}`,
-                filename: "mf_statement.pdf",
-              },
+              file: { file_id: file.id },
             },
           ],
         },
@@ -35,25 +43,24 @@ export async function parseMFStatement(
       max_tokens: 4000,
     });
 
-    console.log(`[PARSE:mf_statement] OpenAI response OK, tokens: ${response.usage?.total_tokens}, finish: ${response.choices[0]?.finish_reason}`);
+    console.log(
+      `[PARSE:mf] OK, tokens: ${response.usage?.total_tokens}, finish: ${response.choices[0]?.finish_reason}`
+    );
+
+    // Clean up
+    try {
+      await client.files.delete(file.id);
+    } catch {
+      // Non-fatal
+    }
 
     const content = response.choices[0].message.content || "{}";
     const parsed = JSON.parse(content);
-
-    console.log(`[PARSE:mf_statement] Parsed ${(parsed.funds || []).length} funds`);
+    console.log(`[PARSE:mf] Parsed ${(parsed.funds || []).length} funds`);
     return parsed as MFStatementParsed;
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
-    console.error(`[PARSE:mf_statement] FAILED:`, {
-      message: error.message,
-      name: error.name,
-      ...(err && typeof err === "object" && "status" in err
-        ? { status: (err as { status: number }).status }
-        : {}),
-      ...(err && typeof err === "object" && "code" in err
-        ? { code: (err as { code: string }).code }
-        : {}),
-    });
+    console.error(`[PARSE:mf] FAILED:`, error.message);
     throw error;
   }
 }
